@@ -10,6 +10,31 @@
 
 Independent project. Not affiliated with TypeSafe AI or the Pi authors.
 
+## OpenRouter (this fork)
+
+Install `pi install git:github.com/cartwmic/pi-typesafe` and add this to
+`~/.pi/agent/settings.json`:
+
+```json
+{ "typesafe": { "backend": "openrouter" } }
+```
+
+Choose `"typesafe"` for the direct provider. Run `/reload` after changing it.
+The global setting takes precedence over `PI_TYPESAFE_BACKEND`; when neither
+is set, the default is `typesafe`. Then run `/typesafe enable` and confirm.
+The extension uses `OPENROUTER_API_KEY`, including the credential injected by
+`openrouter-gate` at session start or `/openrouter on`. No second login or saved
+key is needed. Removing that environment credential blocks subsequent calls,
+even after a successful evaluation. `/typesafe login` and `logout` do not manage
+OpenRouter credentials; use your gate instead.
+
+Requests go to `https://openrouter.ai/api/v1/systemone` with model
+`typesafe/jev-1.13`. TypeSafe keys are never used as an OpenRouter fallback.
+The library supports `createTypeSafe({ backend: "openrouter" })` too.
+OpenRouter model listing is not supported by the TypeSafe SDK; use evaluations
+to verify access. Cost counters remain estimates, not OpenRouter billing totals.
+Git installs load the TypeScript source directly; no build step is required.
+
 ## In one minute
 
 ```bash

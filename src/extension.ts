@@ -1,16 +1,19 @@
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import type { AgentToolResult, ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { Static } from "typebox";
 import { Text } from "@earendil-works/pi-tui";
 import type { Questions } from "@typesafe-ai/sdk";
 import { createTypeSafe, DEFAULT_MAX_REQUESTS } from "./client.js";
-import type { Evaluation, TypeSafe } from "./client.js";
+import type { Evaluation, TypeSafe, TypeSafeBackend } from "./client.js";
 import { authState, clearAuthState, describeAuth } from "./auth.js";
 import { clearStoredApiKey, credentialsPath, keySituation, keySourceLabel } from "./credentials.js";
 import { TypeSafeIntegrationError, safeError } from "./errors.js";
 import { loginWithPrompt } from "./login.js";
 import { DEFAULT_MAX_INPUT_BYTES, evaluationSchema, normalizeEvaluationRequest, prepareEvaluationRequest } from "./schema.js";
 
-const disclosure = "Submitted state and questions will be sent to api.typesafe.ai and may incur charges. Do not include secrets. The extension does not collect files or conversation history. Results are model judgments, not proof or authorization.";
+const disclosure = "Submitted state and questions will be sent to the configured TypeSafe or OpenRouter backend and may incur charges. Do not include secrets. The extension does not collect files or conversation history. Results are model judgments, not proof or authorization.";
 const sample = {
   state: { message: "I was charged twice for my subscription. Please help today." },
   questions: {
@@ -34,13 +37,43 @@ function format(result: Evaluation<Questions>, expanded = false): string {
   return lines.join("\n");
 }
 
+function configuredBackend(): TypeSafeBackend {
+  let settings: { typesafe?: { backend?: unknown } } = {};
+  try {
+    settings = JSON.parse(readFileSync(join(getAgentDir(), "settings.json"), "utf8"));
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+  }
+  const backend = settings.typesafe?.backend ?? process.env.PI_TYPESAFE_BACKEND ?? "typesafe";
+  if (backend !== "typesafe" && backend !== "openrouter") {
+    throw new TypeSafeIntegrationError("configuration", "typesafe.backend must be typesafe or openrouter.");
+  }
+  return backend;
+}
+
 /** Native Pi registration; importing the root library does not load this module. */
 export default function typesafeExtension(pi: ExtensionAPI): void {
   let enabled = process.env.PI_TYPESAFE_ENABLED === "1";
   let client: TypeSafe | undefined;
   // One callout per distinct degradation per session: a long run must not bury the reason in repeated notices.
   let calledOut: string | undefined;
-  const getClient = () => client ??= createTypeSafe();
+  const backend = configuredBackend();
+  const model = backend === "openrouter" ? "typesafe/jev-1.13" : "jev-latest";
+  const getSituation = () => backend === "openrouter"
+    ? (process.env.OPENROUTER_API_KEY?.trim()
+      ? { kind: "environment" as const, key: process.env.OPENROUTER_API_KEY.trim() }
+      : { kind: "missing" as const })
+    : keySituation();
+  const getAuth = () => backend === "openrouter"
+    ? { text: `OpenRouter key: ${getSituation().kind === "missing" ? "missing; enable OpenRouter or set OPENROUTER_API_KEY" : "configured via OPENROUTER_API_KEY"}.`, level: getSituation().kind === "missing" ? "error" as const : "info" as const }
+    : describeAuth(authState());
+  const getClient = () => {
+    // Re-check the gate even when a client has already cached its credential.
+    if (backend === "openrouter" && getSituation().kind === "missing") {
+      throw new TypeSafeIntegrationError("configuration", "No OpenRouter API key. Enable OpenRouter or set OPENROUTER_API_KEY.");
+    }
+    return client ??= createTypeSafe({ backend });
+  };
   const callOut = (ctx: ExtensionContext | undefined, key: string, text: string) => {
     if (calledOut === key) return;
     calledOut = key;
@@ -58,7 +91,7 @@ export default function typesafeExtension(pi: ExtensionAPI): void {
     calledOut = undefined;
     // An enabled extension with no usable key used to look exactly like a working one. Say it at startup; an
     // unverified-but-present key stays quiet, because the first request is what proves it.
-    const auth = describeAuth(authState());
+    const auth = getAuth();
     if (enabled && auth.level === "error") callOut(ctx, `start:${auth.level}`, `TypeSafe is enabled but judgments are skipped. ${auth.text}`);
   });
 
@@ -121,7 +154,7 @@ export default function typesafeExtension(pi: ExtensionAPI): void {
       try {
         if (action === "status") {
           const spend = client?.getSpend();
-          const auth = describeAuth(authState());
+          const auth = getAuth();
           const session = spend
             ? `Session ${spend.session.requestsStarted}/${DEFAULT_MAX_REQUESTS} attempts, ${spend.session.requestsSucceeded} successful, ${spend.session.requestsFailed} failed, ${spend.session.inputTokens} input tokens (~$${spend.session.estimatedUsd.toFixed(4)}).`
             : `Session 0/${DEFAULT_MAX_REQUESTS} attempts; no client yet in this session.`;
@@ -129,7 +162,11 @@ export default function typesafeExtension(pi: ExtensionAPI): void {
             ? `Today ${spend.today.requestsStarted} requests (${spend.today.requestsSucceeded} ok, ${spend.today.requestsFailed} failed), ${spend.today.inputTokens} input tokens, ~$${spend.today.estimatedUsd.toFixed(4)}.`
             : "";
           const blocked = spend?.blocked ? ` Cap reached: ${spend.blocked.cap} ${spend.blocked.used}/${spend.blocked.limit} on ${spend.blocked.day}; no request will be submitted until the local day rolls over.` : "";
-          report(`TypeSafe: ${enabled ? "enabled" : "disabled"}. ${auth.text} ${session} ${today}${blocked} Model: jev-latest. Session limits reset on session start/reload; daily counters persist and caps come from client options or PI_TYPESAFE_MAX_* environment variables. ${disclosure}`, auth.level === "error" && enabled ? "warning" : "info");
+          report(`TypeSafe: ${enabled ? "enabled" : "disabled"}. ${auth.text} ${session} ${today}${blocked} Backend: ${backend}. Model: ${model}. Session limits reset on session start/reload; daily counters persist and caps come from client options or PI_TYPESAFE_MAX_* environment variables. ${disclosure}`, auth.level === "error" && enabled ? "warning" : "info");
+          return;
+        }
+        if (backend === "openrouter" && (action === "login" || action === "logout")) {
+          report("OpenRouter credentials are managed outside TypeSafe. Use your OpenRouter gate or OPENROUTER_API_KEY; /typesafe disable stops tool calls.");
           return;
         }
         if (action === "logout") {
@@ -153,8 +190,8 @@ export default function typesafeExtension(pi: ExtensionAPI): void {
           report("This command needs interactive Pi. For headless tool use, explicitly set PI_TYPESAFE_ENABLED=1 and TYPESAFE_API_KEY before launching Pi.", "warning");
           return;
         }
-        const situation = keySituation();
-        if (action === "login" || (action === "setup" && situation.kind === "missing")) {
+        const situation = getSituation();
+        if (action === "login" || (backend !== "openrouter" && action === "setup" && situation.kind === "missing")) {
           if (process.env.TYPESAFE_API_KEY?.trim()) {
             report("TYPESAFE_API_KEY is set in the environment and takes precedence over a stored key. Unset it before using /typesafe login.", "warning");
             return;
@@ -166,6 +203,7 @@ export default function typesafeExtension(pi: ExtensionAPI): void {
           return;
         }
         if (action === "setup") {
+          if (backend === "openrouter") { report(getAuth().text); return; }
           const current = situation.kind === "environment" || situation.kind === "stored" ? `configured via ${keySourceLabel(situation)}`
             : situation.kind === "unusable" ? `unusable — ${situation.reason}`
             : "missing";
@@ -173,7 +211,7 @@ export default function typesafeExtension(pi: ExtensionAPI): void {
           return;
         }
         if (action === "enable") {
-          if (situation.kind === "missing") { report("Run /typesafe login first: no API key is configured.", "warning"); return; }
+          if (situation.kind === "missing") { report(backend === "openrouter" ? getAuth().text : "Run /typesafe login first: no API key is configured.", "warning"); return; }
           if (situation.kind === "unusable") { report(`The stored key cannot be used. ${situation.reason}`, "warning"); return; }
           if (await ctx.ui.confirm("Enable TypeSafe for this session?", disclosure)) {
             enabled = true;

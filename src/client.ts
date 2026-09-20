@@ -19,7 +19,7 @@ export interface BackendConfig {
 /** Registry of known judgment backends. Extendable by callers. */
 export const DECISIONS_BACKENDS: Record<TypeSafeBackend, BackendConfig> = {
   typesafe: { host: "https://api.typesafe.ai", keyEnv: "TYPESAFE_API_KEY" },
-  openrouter: { host: "https://openrouter.ai", keyEnv: "OPENROUTER_API_KEY" },
+  openrouter: { host: "https://openrouter.ai/api", keyEnv: "OPENROUTER_API_KEY" },
 };
 
 export interface TypeSafeOptions {
@@ -157,13 +157,12 @@ export function createTypeSafe(options: TypeSafeOptions = {}): TypeSafe {
   }
 
   if (!apiKey) {
-    // Backend-specific env var first (e.g. OPENROUTER_API_KEY), then fall back to
-    // the standard TYPESAFE_API_KEY / stored-key resolution.
+    // Never send a TypeSafe credential to a different backend.
     if (backendName !== undefined && keyEnv !== "TYPESAFE_API_KEY") {
       const fromEnv = process.env[keyEnv]?.trim();
       if (fromEnv) apiKey = fromEnv;
     }
-    if (!apiKey) {
+    if (!apiKey && keyEnv === "TYPESAFE_API_KEY") {
       const situation = keySituation();
       if (situation.kind === "unusable") throw new TypeSafeIntegrationError("configuration", situation.reason);
       if (situation.kind === "environment" || situation.kind === "stored") apiKey = situation.key;
