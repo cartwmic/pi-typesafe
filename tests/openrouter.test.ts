@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { test } from "node:test";
 import { DefaultResourceLoader, SettingsManager } from "@earendil-works/pi-coding-agent";
+import { Check } from "typebox/value";
 import { createTypeSafe } from "../src/client.js";
 
 test("installed Pi entry routes judgments with the gate credential and fails closed after gate-off", async () => {
@@ -37,6 +38,8 @@ test("installed Pi entry routes judgments with the gate credential and fails clo
     const extension = loader.getExtensions().extensions[0]!;
     const command = extension.commands.get("typesafe")!;
     const tool = extension.tools.get("typesafe_evaluate")!;
+    assert.equal(Check(tool.definition.parameters, { state: "synthetic", questions: { category: { type: "choice", criteria: { billing: "Charges" } } } }), false, "OpenRouter requires explicit instructions");
+    assert.equal(Check(tool.definition.parameters, { state: "synthetic", questions: { urgent: { type: "noul", instructions: null } } }), false);
     const ctx = { hasUI: true, ui: { notify: (s: string) => notices.push(s), confirm: async () => true } };
     const run = (action: string) => Reflect.apply(command.handler, command, [action, ctx]);
     const evaluate = () => Reflect.apply(tool.definition.execute, tool.definition, ["test", { state: "Help today", questions: { urgent: { type: "noul", instructions: "Is help requested today?" } } }, undefined, undefined, ctx]);

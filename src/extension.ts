@@ -11,7 +11,7 @@ import { authState, clearAuthState, describeAuth } from "./auth.js";
 import { clearStoredApiKey, credentialsPath, keySituation, keySourceLabel } from "./credentials.js";
 import { TypeSafeIntegrationError, safeError } from "./errors.js";
 import { loginWithPrompt } from "./login.js";
-import { DEFAULT_MAX_INPUT_BYTES, evaluationSchema, normalizeEvaluationRequest, prepareEvaluationRequest } from "./schema.js";
+import { DEFAULT_MAX_INPUT_BYTES, evaluationSchema, openRouterEvaluationSchema, normalizeEvaluationRequest, prepareEvaluationRequest } from "./schema.js";
 
 const disclosure = "Submitted state and questions will be sent to the configured TypeSafe or OpenRouter backend and may incur charges. Do not include secrets. The extension does not collect files or conversation history. Results are model judgments, not proof or authorization.";
 const sample = {
@@ -108,7 +108,7 @@ export default function typesafeExtension(pi: ExtensionAPI): void {
       "When typesafe_evaluate judges several items, give each item a named state field and ask one question per item per dimension, naming the field in the instructions; one question over many items returns an unusable blend.",
       "Report typesafe_evaluate answers as the model's judgments with their probabilities; do not replace them with your own guesses, and say when an answer is uncertain.",
     ],
-    parameters: evaluationSchema,
+    parameters: backend === "openrouter" ? openRouterEvaluationSchema : evaluationSchema,
     // Pi validates against `parameters` after this hook; the cast only names the schema's type.
     prepareArguments: args => normalizeEvaluationRequest(args) as Static<typeof evaluationSchema>,
     async execute(_id, params, signal, _onUpdate, ctx): Promise<AgentToolResult<Evaluation<Questions>>> {

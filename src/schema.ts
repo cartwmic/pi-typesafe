@@ -16,7 +16,10 @@ const entry = Type.Union([
   Type.Array(Type.Unknown()),
   Type.Record(Type.String(), Type.Unknown()),
 ]);
-const instructions = Type.Optional(entry);
+function makeEvaluationSchema(requireInstructions = false) {
+const instructions = requireInstructions
+  ? Type.Union([Type.String(), Type.Array(Type.Unknown()), Type.Record(Type.String(), Type.Unknown())])
+  : Type.Optional(entry);
 const question = Type.Union([
   Type.Object({
     type: Type.Literal("noul"),
@@ -39,7 +42,7 @@ const question = Type.Union([
 ]);
 
 /** The JSON schema used by both the Pi tool and the programmatic interface. */
-export const evaluationSchema = Type.Object({
+return Type.Object({
   state: entry,
   questions: Type.Record(Type.String({ minLength: 1, maxLength: 100 }), question, {
     minProperties: 1,
@@ -47,6 +50,10 @@ export const evaluationSchema = Type.Object({
   }),
   model: Type.Optional(Type.String({ minLength: 1, maxLength: 100 })),
 }, { additionalProperties: false });
+}
+
+export const evaluationSchema = makeEvaluationSchema();
+export const openRouterEvaluationSchema = makeEvaluationSchema(true);
 
 const usage = `Expected { state, questions: { <id>: { type: "choice", instructions, criteria: { label: description|null } } | { type: "score", instructions, criteria: [level0, level1, ...] } | { type: "noul", instructions } } }; 1–${DEFAULT_MAX_QUESTIONS} questions, Choice 1–64 options, Score 2–32 levels.`;
 
